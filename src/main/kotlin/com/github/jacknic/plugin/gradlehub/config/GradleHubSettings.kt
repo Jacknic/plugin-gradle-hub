@@ -21,6 +21,8 @@ class GradleHubSettings : PersistentStateComponent<GradleHubSettings.State> {
         var mirrorUrl: String = ""
         var repositoryMirrorUrl: String = ""
         var mirrorEnabled: Boolean = true
+        var initGradleEnabled: Boolean = true
+        var repositoryProxyEnabled: Boolean = false
         var gradleHome: String = ""
         var keepVersions: Int = 2
     }
@@ -52,6 +54,20 @@ class GradleHubSettings : PersistentStateComponent<GradleHubSettings.State> {
         get() = myState.mirrorEnabled
         set(value) {
             myState.mirrorEnabled = value
+        }
+
+    /** Whether the init.gradle proxy for repository mirroring is enabled */
+    var initGradleEnabled: Boolean
+        get() = myState.initGradleEnabled
+        set(value) {
+            myState.initGradleEnabled = value
+        }
+
+    /** Whether direct file modification for repository mirroring is enabled */
+    var repositoryProxyEnabled: Boolean
+        get() = myState.repositoryProxyEnabled
+        set(value) {
+            myState.repositoryProxyEnabled = value
         }
 
     /** Local Gradle installation directory. Defaults to `~/.gradle` if empty. */

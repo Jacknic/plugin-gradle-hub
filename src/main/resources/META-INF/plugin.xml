@@ -12,6 +12,12 @@
         <!-- Application-level persistent settings -->
         <applicationService serviceImplementation="com.github.jacknic.plugin.gradlehub.config.GradleHubSettings"/>
 
+        <!-- Project-level services -->
+        <projectService serviceImplementation="com.github.jacknic.plugin.gradlehub.service.WrapperProxyService"/>
+        <projectService serviceImplementation="com.github.jacknic.plugin.gradlehub.service.RepositoryProxyService"/>
+        <projectService serviceImplementation="com.github.jacknic.plugin.gradlehub.service.InitGradleService"/>
+        <projectService serviceImplementation="com.github.jacknic.plugin.gradlehub.service.ProxyOrchestrator"/>
+
         <!-- Settings page under Settings → Tools → GradleHub -->
         <applicationConfigurable
                 parentId="tools"

@@ -20,6 +20,8 @@ class GradleHubSettingsTest : BasePlatformTestCase() {
         assertEquals("", settings.mirrorUrl)
         assertEquals("", settings.repositoryMirrorUrl)
         assertTrue(settings.mirrorEnabled)
+        assertTrue(settings.initGradleEnabled)
+        assertFalse(settings.repositoryProxyEnabled)
         assertEquals("", settings.gradleHome)
         assertEquals(2, settings.keepVersions)
     }
@@ -39,6 +41,20 @@ class GradleHubSettingsTest : BasePlatformTestCase() {
         assertFalse(settings.mirrorEnabled)
         settings.mirrorEnabled = true
         assertTrue(settings.mirrorEnabled)
+    }
+
+    fun testInitGradleEnabledSetterGetter() {
+        settings.initGradleEnabled = false
+        assertFalse(settings.initGradleEnabled)
+        settings.initGradleEnabled = true
+        assertTrue(settings.initGradleEnabled)
+    }
+
+    fun testRepositoryProxyEnabledSetterGetter() {
+        settings.repositoryProxyEnabled = true
+        assertTrue(settings.repositoryProxyEnabled)
+        settings.repositoryProxyEnabled = false
+        assertFalse(settings.repositoryProxyEnabled)
     }
 
     fun testGradleHomeSetterGetter() {
@@ -75,11 +91,15 @@ class GradleHubSettingsTest : BasePlatformTestCase() {
     fun testStatePersistence() {
         settings.mirrorUrl = "https://mirrors.aliyun.com/gradle/"
         settings.mirrorEnabled = false
+        settings.initGradleEnabled = false
+        settings.repositoryProxyEnabled = true
         settings.keepVersions = 3
 
         val state = settings.state
         assertEquals("https://mirrors.aliyun.com/gradle/", state.mirrorUrl)
         assertFalse(state.mirrorEnabled)
+        assertFalse(state.initGradleEnabled)
+        assertTrue(state.repositoryProxyEnabled)
         assertEquals(3, state.keepVersions)
 
         // Load state into a new instance
@@ -87,6 +107,8 @@ class GradleHubSettingsTest : BasePlatformTestCase() {
         newSettings.loadState(state)
         assertEquals("https://mirrors.aliyun.com/gradle/", newSettings.mirrorUrl)
         assertFalse(newSettings.mirrorEnabled)
+        assertFalse(newSettings.initGradleEnabled)
+        assertTrue(newSettings.repositoryProxyEnabled)
         assertEquals(3, newSettings.keepVersions)
     }
 }
