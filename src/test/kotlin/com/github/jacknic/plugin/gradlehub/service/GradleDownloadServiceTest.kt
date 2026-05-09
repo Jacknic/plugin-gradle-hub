@@ -251,6 +251,39 @@ class GradleDownloadServiceTest : BasePlatformTestCase() {
         }
     }
 
+    // ---- DownloadProgress ----
+
+    fun testDownloadProgress_percentage() {
+        val progress = DownloadProgress(downloaded = 50, total = 100, speed = 1024, etaSeconds = 1)
+        assertEquals(50, progress.percentage)
+    }
+
+    fun testDownloadProgress_percentageUnknown() {
+        val progress = DownloadProgress(downloaded = 50, total = -1, speed = 1024, etaSeconds = -1)
+        assertEquals(-1, progress.percentage)
+    }
+
+    fun testDownloadProgress_isTotalKnown() {
+        assertTrue(DownloadProgress(50, 100, 0, 0).isTotalKnown)
+        assertFalse(DownloadProgress(50, -1, 0, 0).isTotalKnown)
+    }
+
+    fun testDownloadProgress_formatSpeed() {
+        assertEquals("512 B/s", DownloadProgress.formatSpeed(512))
+        assertEquals("1.5 KB/s", DownloadProgress.formatSpeed(1536))
+        assertEquals("2.0 MB/s", DownloadProgress.formatSpeed(2L * 1024 * 1024))
+        assertEquals("1.0 GB/s", DownloadProgress.formatSpeed(1L * 1024 * 1024 * 1024))
+        assertEquals("", DownloadProgress.formatSpeed(0))
+    }
+
+    fun testDownloadProgress_formatEta() {
+        assertEquals("", DownloadProgress.formatEta(0))
+        assertEquals("", DownloadProgress.formatEta(-1))
+        assertEquals("30s", DownloadProgress.formatEta(30))
+        assertEquals("1m 30s", DownloadProgress.formatEta(90))
+        assertEquals("1h 1m", DownloadProgress.formatEta(3660))
+    }
+
     // ---- extractZip ----
 
     fun testExtractZip_simpleZip() {
@@ -288,7 +321,7 @@ class GradleDownloadServiceTest : BasePlatformTestCase() {
             val result = GradleDownloadService.downloadFile(
                 "http://localhost:1/nonexistent",
                 targetFile,
-                onProgress = { _, _ -> }
+                onProgress = {}
             )
             assertFalse(result)
             assertFalse(targetFile.exists())
@@ -304,7 +337,7 @@ class GradleDownloadServiceTest : BasePlatformTestCase() {
             val result = GradleDownloadService.downloadFile(
                 "http://localhost:1/nonexistent",
                 targetFile,
-                onProgress = { _, _ -> },
+                onProgress = {},
                 isCancelled = { true }
             )
             assertFalse(result)

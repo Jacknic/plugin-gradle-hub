@@ -14,6 +14,63 @@ import java.security.MessageDigest
 import java.util.zip.ZipFile
 
 /**
+ * Download progress information with speed and ETA calculation.
+ */
+data class DownloadProgress(
+    /** Bytes downloaded so far. */
+    val downloaded: Long,
+    /** Total bytes to download, or -1 if unknown. */
+    val total: Long,
+    /** Current download speed in bytes per second. */
+    val speed: Long,
+    /** Estimated seconds remaining, or -1 if unknown. */
+    val etaSeconds: Long,
+) {
+    /** Download percentage (0-100), or -1 if total is unknown. */
+    val percentage: Int
+        get() = if (total > 0) (downloaded * 100 / total).toInt() else -1
+
+    /** Whether the total size is known. */
+    val isTotalKnown: Boolean
+        get() = total > 0
+
+    companion object {
+        private const val KB: Long = 1024
+        private const val MB = KB * 1024
+        private const val GB = MB * 1024
+
+        /** Format speed in human-readable form. */
+        fun formatSpeed(bytesPerSec: Long): String = when {
+            bytesPerSec >= GB -> "%.1f GB/s".format(bytesPerSec.toDouble() / GB)
+            bytesPerSec >= MB -> "%.1f MB/s".format(bytesPerSec.toDouble() / MB)
+            bytesPerSec >= KB -> "%.1f KB/s".format(bytesPerSec.toDouble() / KB)
+            bytesPerSec > 0 -> "$bytesPerSec B/s"
+            else -> ""
+        }
+
+        /** Format ETA in human-readable form. */
+        fun formatEta(seconds: Long): String = when {
+            seconds <= 0 -> ""
+            seconds < 60 -> "${seconds}s"
+            seconds < 3600 -> "${seconds / 60}m ${seconds % 60}s"
+            else -> "${seconds / 3600}h ${seconds % 3600 / 60}m"
+        }
+    }
+}
+
+/**
+ * Phases of a Gradle version download operation.
+ */
+enum class DownloadPhase {
+    /** Downloading the distribution zip file. */
+    DOWNLOADING,
+    /** Extracting the zip file. */
+    EXTRACTING,
+    /** Operation completed. */
+    COMPLETED
+}
+
+/**
  * Application-level service for downloading Gradle distributions.
  *
  * Core responsibilities:
@@ -35,6 +92,9 @@ class GradleDownloadService {
 
         /** Download buffer size (8 KB). */
         private const val BUFFER_SIZE = 8192
+
+        /** Minimum interval between progress callbacks (ms). */
+        private const val PROGRESS_CALLBACK_INTERVAL_MS = 200L
 
         @JvmStatic
         fun getInstance(): GradleDownloadService =
@@ -155,16 +215,19 @@ class GradleDownloadService {
         /**
          * Download a file from a URL with progress tracking and cancellation support.
          *
+         * Progress callbacks are throttled to [PROGRESS_CALLBACK_INTERVAL_MS] intervals
+         * and include download speed and ETA estimation.
+         *
          * @param url the URL to download from
          * @param targetFile the file to save the downloaded content to
-         * @param onProgress callback receiving (downloaded bytes, total bytes; -1 if unknown)
+         * @param onProgress callback receiving [DownloadProgress] with size, speed, and ETA
          * @param isCancelled function returning true to cancel the download
          * @return true if the download completed successfully
          */
         fun downloadFile(
             url: String,
             targetFile: File,
-            onProgress: (downloaded: Long, total: Long) -> Unit,
+            onProgress: (DownloadProgress) -> Unit = {},
             isCancelled: () -> Boolean = { false }
         ): Boolean {
             var connection: HttpURLConnection? = null
@@ -183,10 +246,14 @@ class GradleDownloadService {
                 val contentLength = connection.contentLengthLong
                 targetFile.parentFile?.mkdirs()
 
+                var lastCallbackTime = System.currentTimeMillis()
+                var lastCallbackDownloaded = 0L
+                var smoothSpeed = 0L
+                var downloaded = 0L
+
                 connection.inputStream.buffered().use { input ->
                     FileOutputStream(targetFile).buffered().use { output ->
                         val buffer = ByteArray(BUFFER_SIZE)
-                        var downloaded = 0L
 
                         while (true) {
                             if (isCancelled()) {
@@ -200,10 +267,42 @@ class GradleDownloadService {
 
                             output.write(buffer, 0, read)
                             downloaded += read
-                            onProgress(downloaded, if (contentLength > 0) contentLength else -1L)
+
+                            // Throttled progress callback with speed calculation
+                            val now = System.currentTimeMillis()
+                            val elapsed = now - lastCallbackTime
+                            if (elapsed >= PROGRESS_CALLBACK_INTERVAL_MS) {
+                                if (elapsed > 0) {
+                                    val bytesSinceLast = downloaded - lastCallbackDownloaded
+                                    val instantSpeed = (bytesSinceLast * 1000L) / elapsed
+                                    smoothSpeed = if (smoothSpeed == 0L) instantSpeed
+                                    else (smoothSpeed * 0.7 + instantSpeed * 0.3).toLong()
+                                }
+                                val total = if (contentLength > 0) contentLength else -1L
+                                val eta = if (smoothSpeed > 0 && total > 0 && downloaded < total)
+                                    (total - downloaded) / smoothSpeed else -1L
+
+                                onProgress(DownloadProgress(
+                                    downloaded = downloaded,
+                                    total = total,
+                                    speed = smoothSpeed,
+                                    etaSeconds = eta,
+                                ))
+                                lastCallbackTime = now
+                                lastCallbackDownloaded = downloaded
+                            }
                         }
                     }
                 }
+
+                // Final progress callback to report completion
+                val total = if (contentLength > 0) contentLength else -1L
+                onProgress(DownloadProgress(
+                    downloaded = if (total > 0) total else downloaded,
+                    total = total,
+                    speed = smoothSpeed,
+                    etaSeconds = 0,
+                ))
 
                 return true
             } catch (e: Exception) {
@@ -327,14 +426,16 @@ class GradleDownloadService {
      *
      * @param version the Gradle version string (e.g. "8.6")
      * @param distType the distribution type ("bin" or "all")
-     * @param onProgress callback for progress updates (downloaded bytes, total bytes)
+     * @param onProgress callback for progress updates with speed and ETA
+     * @param onPhaseChange callback for download phase changes (downloading, extracting, completed)
      * @param isCancelled function that returns true to cancel the download
      * @return the target directory if download was successful, null otherwise
      */
     fun downloadVersion(
         version: String,
         distType: String = "bin",
-        onProgress: (downloaded: Long, total: Long) -> Unit = { _, _ -> },
+        onProgress: (DownloadProgress) -> Unit = {},
+        onPhaseChange: (DownloadPhase) -> Unit = {},
         isCancelled: () -> Boolean = { false }
     ): File? {
         val gradleHome = settings.getEffectiveGradleHome()
@@ -347,6 +448,7 @@ class GradleDownloadService {
         // Check if already downloaded
         if (markerFile.exists() && zipFile.exists()) {
             LOG.info("Gradle $version already downloaded at ${targetDir.absolutePath}")
+            onPhaseChange(DownloadPhase.COMPLETED)
             return targetDir
         }
 
@@ -357,6 +459,7 @@ class GradleDownloadService {
         val downloadUrl = getEffectiveDownloadUrl(version, distType)
         LOG.info("Downloading Gradle $version from $downloadUrl")
 
+        onPhaseChange(DownloadPhase.DOWNLOADING)
         val success = downloadFile(downloadUrl, zipFile, onProgress, isCancelled)
         if (!success) {
             return null
@@ -365,6 +468,7 @@ class GradleDownloadService {
         // Extract the zip
         try {
             LOG.info("Extracting Gradle $version to ${targetDir.absolutePath}")
+            onPhaseChange(DownloadPhase.EXTRACTING)
             extractZip(zipFile, targetDir)
         } catch (e: Exception) {
             LOG.warn("Failed to extract Gradle $version", e)
@@ -378,6 +482,7 @@ class GradleDownloadService {
             LOG.warn("Failed to create marker file for Gradle $version", e)
         }
 
+        onPhaseChange(DownloadPhase.COMPLETED)
         LOG.info("Successfully downloaded and extracted Gradle $version to ${targetDir.absolutePath}")
         return targetDir
     }

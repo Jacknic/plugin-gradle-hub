@@ -3,6 +3,8 @@ package com.github.jacknic.plugin.gradlehub.toolWindow
 import com.github.jacknic.plugin.gradlehub.GradleHubBundle
 import com.github.jacknic.plugin.gradlehub.config.GradleHubSettings
 import com.github.jacknic.plugin.gradlehub.model.RemoteGradleVersion
+import com.github.jacknic.plugin.gradlehub.service.DownloadPhase
+import com.github.jacknic.plugin.gradlehub.service.DownloadProgress
 import com.github.jacknic.plugin.gradlehub.service.GradleDownloadService
 import com.github.jacknic.plugin.gradlehub.service.WrapperProxyService
 import com.intellij.openapi.application.ApplicationManager
@@ -234,6 +236,7 @@ class DownloadVersionDialog(private val project: Project) : DialogWrapper(projec
         fetchButton.isEnabled = false
         switchButton.isEnabled = false
         progressBar.isVisible = true
+        progressBar.isIndeterminate = false
         progressBar.value = 0
         statusLabel.text = GradleHubBundle.message("download.downloading", version)
 
@@ -243,17 +246,14 @@ class DownloadVersionDialog(private val project: Project) : DialogWrapper(projec
             val result = downloadService.downloadVersion(
                 version = version,
                 distType = distType,
-                onProgress = { downloaded, total ->
+                onProgress = { progress ->
                     ApplicationManager.getApplication().invokeLater {
-                        if (total > 0) {
-                            progressBar.value = (downloaded * 100 / total).toInt()
-                            val sizeStr = com.github.jacknic.plugin.gradlehub.model.GradleVersionInfo.formatFileSize(downloaded)
-                            val totalStr = com.github.jacknic.plugin.gradlehub.model.GradleVersionInfo.formatFileSize(total)
-                            statusLabel.text = GradleHubBundle.message("download.progress", sizeStr, totalStr)
-                        } else {
-                            val sizeStr = com.github.jacknic.plugin.gradlehub.model.GradleVersionInfo.formatFileSize(downloaded)
-                            statusLabel.text = GradleHubBundle.message("download.progressUnknown", sizeStr)
-                        }
+                        updateDownloadProgress(progress)
+                    }
+                },
+                onPhaseChange = { phase ->
+                    ApplicationManager.getApplication().invokeLater {
+                        updateDownloadPhase(phase, version)
                     }
                 },
                 isCancelled = { isCancelled }
@@ -262,6 +262,7 @@ class DownloadVersionDialog(private val project: Project) : DialogWrapper(projec
             ApplicationManager.getApplication().invokeLater {
                 isDownloading = false
                 progressBar.isVisible = false
+                progressBar.isIndeterminate = false
                 fetchButton.isEnabled = true
 
                 if (isCancelled) {
@@ -275,6 +276,52 @@ class DownloadVersionDialog(private val project: Project) : DialogWrapper(projec
                 }
 
                 updateDownloadButton()
+            }
+        }
+    }
+
+    private fun updateDownloadProgress(progress: DownloadProgress) {
+        val sizeStr = com.github.jacknic.plugin.gradlehub.model.GradleVersionInfo.formatFileSize(progress.downloaded)
+
+        if (progress.isTotalKnown) {
+            val totalStr = com.github.jacknic.plugin.gradlehub.model.GradleVersionInfo.formatFileSize(progress.total)
+            val pct = progress.percentage
+            progressBar.value = pct
+            progressBar.isIndeterminate = false
+
+            val speedStr = DownloadProgress.formatSpeed(progress.speed)
+            val etaStr = DownloadProgress.formatEta(progress.etaSeconds)
+
+            statusLabel.text = if (etaStr.isNotEmpty() && speedStr.isNotEmpty()) {
+                GradleHubBundle.message("download.progressWithSpeed", sizeStr, totalStr, pct, speedStr, etaStr)
+            } else if (speedStr.isNotEmpty()) {
+                GradleHubBundle.message("download.progressWithSpeedNoEta", sizeStr, totalStr, pct, speedStr)
+            } else {
+                GradleHubBundle.message("download.progress", sizeStr, totalStr)
+            }
+        } else {
+            progressBar.isIndeterminate = true
+            val speedStr = DownloadProgress.formatSpeed(progress.speed)
+            statusLabel.text = if (speedStr.isNotEmpty()) {
+                GradleHubBundle.message("download.progressUnknownWithSpeed", sizeStr, speedStr)
+            } else {
+                GradleHubBundle.message("download.progressUnknown", sizeStr)
+            }
+        }
+    }
+
+    private fun updateDownloadPhase(phase: DownloadPhase, version: String) {
+        when (phase) {
+            DownloadPhase.DOWNLOADING -> {
+                progressBar.isIndeterminate = false
+            }
+            DownloadPhase.EXTRACTING -> {
+                progressBar.isIndeterminate = true
+                statusLabel.text = GradleHubBundle.message("download.extracting", version)
+            }
+            DownloadPhase.COMPLETED -> {
+                progressBar.isIndeterminate = false
+                progressBar.value = 100
             }
         }
     }
