@@ -1,4 +1,4 @@
-package com.github.jacknic.plugingradlehub.toolWindow
+package com.github.jacknic.plugin.gradlehub.toolWindow
 
 import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.thisLogger
@@ -8,8 +8,8 @@ import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.content.ContentFactory
-import com.github.jacknic.plugingradlehub.MyBundle
-import com.github.jacknic.plugingradlehub.services.MyProjectService
+import com.github.jacknic.plugin.gradlehub.MyBundle
+import com.github.jacknic.plugin.gradlehub.services.MyProjectService
 import javax.swing.JButton
 
 

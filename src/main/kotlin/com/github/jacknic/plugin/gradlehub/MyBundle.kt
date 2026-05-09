@@ -1,4 +1,4 @@
-package com.github.jacknic.plugingradlehub
+package com.github.jacknic.plugin.gradlehub
 
 import com.intellij.DynamicBundle
 import org.jetbrains.annotations.NonNls

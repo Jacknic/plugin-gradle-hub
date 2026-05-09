@@ -1,9 +1,9 @@
-package com.github.jacknic.plugingradlehub.services
+package com.github.jacknic.plugin.gradlehub.services
 
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.project.Project
-import com.github.jacknic.plugingradlehub.MyBundle
+import com.github.jacknic.plugin.gradlehub.MyBundle
 
 @Service(Service.Level.PROJECT)
 class MyProjectService(project: Project) {

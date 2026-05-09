@@ -1,4 +1,4 @@
-package com.github.jacknic.plugingradlehub.listeners
+package com.github.jacknic.plugin.gradlehub.listeners
 
 import com.intellij.openapi.application.ApplicationActivationListener
 import com.intellij.openapi.diagnostic.thisLogger
