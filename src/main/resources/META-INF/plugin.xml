@@ -1,18 +1,27 @@
 <!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
 <idea-plugin>
     <id>com.github.jacknic.plugin.gradlehub</id>
-    <name>plugin-gradle-hub Template</name>
+    <name>GradleHub</name>
     <vendor>jacknic</vendor>
 
     <depends>com.intellij.modules.platform</depends>
 
-    <resource-bundle>messages.MyBundle</resource-bundle>
+    <resource-bundle>messages.GradleHubBundle</resource-bundle>
 
     <extensions defaultExtensionNs="com.intellij">
-        <toolWindow factoryClass="com.github.jacknic.plugin.gradlehub.toolWindow.MyToolWindowFactory" id="MyToolWindow"/>
-    </extensions>
+        <!-- Application-level persistent settings -->
+        <applicationService serviceImplementation="com.github.jacknic.plugin.gradlehub.config.GradleHubSettings"/>
 
-    <applicationListeners>
-        <listener class="com.github.jacknic.plugin.gradlehub.listeners.MyApplicationActivationListener" topic="com.intellij.openapi.application.ApplicationActivationListener"/>
-    </applicationListeners>
+        <!-- Settings page under Settings → Tools → GradleHub -->
+        <applicationConfigurable
+                parentId="tools"
+                instance="com.github.jacknic.plugin.gradlehub.config.GradleHubConfigurable"
+                id="com.github.jacknic.plugin.gradlehub.config.GradleHubConfigurable"
+                displayName="GradleHub"/>
+
+        <!-- Tool Window -->
+        <toolWindow factoryClass="com.github.jacknic.plugin.gradlehub.toolWindow.GradleHubToolWindowFactory"
+                    id="GradleHub"
+                    anchor="right"/>
+    </extensions>
 </idea-plugin>
