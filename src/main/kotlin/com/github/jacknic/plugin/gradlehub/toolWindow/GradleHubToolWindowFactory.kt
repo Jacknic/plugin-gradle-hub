@@ -23,6 +23,7 @@ import javax.swing.JOptionPane
 import javax.swing.JProgressBar
 import javax.swing.JTabbedPane
 import javax.swing.SwingConstants
+import javax.swing.SwingUtilities
 import javax.swing.table.AbstractTableModel
 
 /**
@@ -308,6 +309,7 @@ private class VersionsPanel(private val project: Project) : SimpleToolWindowPane
     private val switchButton = JButton()
     private val deleteButton = JButton()
     private val cleanupButton = JButton()
+    private val downloadButton = JButton()
     private val refreshButton = JButton()
     private val cancelButton = JButton()
     private val pauseButton = JButton()
@@ -352,6 +354,7 @@ private class VersionsPanel(private val project: Project) : SimpleToolWindowPane
             switchButton.addActionListener { switchVersion() }
             deleteButton.addActionListener { deleteSelectedVersion() }
             cleanupButton.addActionListener { cleanupOldVersions() }
+            downloadButton.addActionListener { openDownloadDialog() }
             refreshButton.addActionListener { startAsyncScan() }
             cancelButton.addActionListener { cancelScan() }
             pauseButton.addActionListener { togglePause() }
@@ -359,6 +362,7 @@ private class VersionsPanel(private val project: Project) : SimpleToolWindowPane
             add(switchButton)
             add(deleteButton)
             add(cleanupButton)
+            add(downloadButton)
             add(refreshButton)
             add(cancelButton)
             add(pauseButton)
@@ -482,6 +486,7 @@ private class VersionsPanel(private val project: Project) : SimpleToolWindowPane
         switchButton.isEnabled = !scanning && table.selectedRow >= 0
         deleteButton.isEnabled = !scanning && table.selectedRow >= 0
         cleanupButton.isEnabled = !scanning
+        downloadButton.isEnabled = !scanning
     }
 
     private fun updateInfoLabel(versions: List<GradleVersionInfo>) {
@@ -503,6 +508,7 @@ private class VersionsPanel(private val project: Project) : SimpleToolWindowPane
         switchButton.text = GradleHubBundle.message("toolWindow.switchVersion")
         deleteButton.text = GradleHubBundle.message("toolWindow.deleteVersion")
         cleanupButton.text = GradleHubBundle.message("toolWindow.cleanupVersions")
+        downloadButton.text = GradleHubBundle.message("toolWindow.downloadVersion")
         refreshButton.text = GradleHubBundle.message("toolWindow.refreshVersions")
         cancelButton.text = GradleHubBundle.message("toolWindow.scan.cancel")
         pauseButton.text = GradleHubBundle.message("toolWindow.scan.pause")
@@ -518,6 +524,7 @@ private class VersionsPanel(private val project: Project) : SimpleToolWindowPane
         val current = wrapperService.getCurrentGradleVersion()
         val deletable = versionService.getDeletableVersions(current)
         cleanupButton.isEnabled = deletable.isNotEmpty()
+        downloadButton.isEnabled = true
     }
 
     // ---- Version actions ----
@@ -595,5 +602,13 @@ private class VersionsPanel(private val project: Project) : SimpleToolWindowPane
             )
             startAsyncScan()
         }
+    }
+
+    private fun openDownloadDialog() {
+        val dialog = DownloadVersionDialog(project)
+        dialog.show()
+
+        // Refresh the version list after the dialog closes (download may have added a new version)
+        startAsyncScan()
     }
 }

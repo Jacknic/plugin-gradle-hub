@@ -20,6 +20,7 @@
 
         <!-- Application-level services -->
         <applicationService serviceImplementation="com.github.jacknic.plugin.gradlehub.service.GradleVersionService"/>
+        <applicationService serviceImplementation="com.github.jacknic.plugin.gradlehub.service.GradleDownloadService"/>
         <applicationService serviceImplementation="com.github.jacknic.plugin.gradlehub.config.VersionScanManager"/>
 
         <!-- Settings page under Settings → Tools → GradleHub -->
