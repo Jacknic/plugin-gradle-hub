@@ -2,6 +2,7 @@ package com.github.jacknic.plugin.gradlehub.toolWindow
 
 import com.github.jacknic.plugin.gradlehub.GradleHubBundle
 import com.github.jacknic.plugin.gradlehub.config.GradleHubSettings
+import com.github.jacknic.plugin.gradlehub.config.VersionScanManager
 import com.github.jacknic.plugin.gradlehub.model.GradleVersionInfo
 import com.github.jacknic.plugin.gradlehub.service.GradleVersionService
 import com.github.jacknic.plugin.gradlehub.service.ProxyOrchestrator
@@ -19,6 +20,7 @@ import java.awt.BorderLayout
 import java.awt.FlowLayout
 import javax.swing.JButton
 import javax.swing.JOptionPane
+import javax.swing.JProgressBar
 import javax.swing.JTabbedPane
 import javax.swing.SwingConstants
 import javax.swing.table.AbstractTableModel
@@ -212,14 +214,15 @@ private class ProxyPanel(project: Project) : SimpleToolWindowPanel(false, true) 
 
 /**
  * Table model for displaying Gradle versions.
+ *
+ * Supports incremental updates via [replaceVersions] to avoid full table refresh
+ * when only rows are added during a scan.
  */
 private class GradleVersionTableModel : AbstractTableModel() {
 
+    @Volatile
     var versions: List<GradleVersionInfo> = emptyList()
-        set(value) {
-            field = value
-            fireTableDataChanged()
-        }
+        private set
 
     var currentVersion: String? = null
 
@@ -228,6 +231,33 @@ private class GradleVersionTableModel : AbstractTableModel() {
         GradleHubBundle.message("toolWindow.pathColumn"),
         GradleHubBundle.message("toolWindow.sizeColumn"),
     )
+
+    /**
+     * Full replacement of the version list.
+     * Fires a complete data-changed event.
+     */
+    fun setVersions(value: List<GradleVersionInfo>) {
+        versions = value
+        fireTableDataChanged()
+    }
+
+    /**
+     * Incremental replacement that fires row-level events when possible.
+     * Falls back to [fireTableDataChanged] for large changes.
+     */
+    fun replaceVersions(newVersions: List<GradleVersionInfo>) {
+        val oldSize = versions.size
+        versions = newVersions
+        when {
+            oldSize == 0 -> fireTableDataChanged()
+            newVersions.size > oldSize -> {
+                fireTableRowsInserted(oldSize, newVersions.size - 1)
+                // Existing rows may have been re-sorted
+                if (newVersions.size > 1) fireTableRowsUpdated(0, oldSize - 1)
+            }
+            else -> fireTableDataChanged()
+        }
+    }
 
     override fun getRowCount(): Int = versions.size
 
@@ -251,9 +281,16 @@ private class GradleVersionTableModel : AbstractTableModel() {
 
 /**
  * Panel for local Gradle version management.
+ *
+ * Uses [VersionScanManager] for fully asynchronous scanning with:
+ * - Real-time progress bar and status label
+ * - Cancel and pause/resume controls
+ * - Throttled table updates to prevent excessive repaints
+ * - Non-blocking EDT: all file I/O runs off the EDT
  */
 private class VersionsPanel(private val project: Project) : SimpleToolWindowPanel(false, true) {
 
+    private val scanManager = VersionScanManager.getInstance()
     private val versionService = GradleVersionService.getInstance()
     private val wrapperService = project.service<WrapperProxyService>()
     private val settings = GradleHubSettings.getInstance()
@@ -261,10 +298,28 @@ private class VersionsPanel(private val project: Project) : SimpleToolWindowPane
     private val tableModel = GradleVersionTableModel()
     private val table = JBTable(tableModel)
     private val infoLabel = JBLabel().apply { horizontalAlignment = SwingConstants.LEFT }
+    private val scanStatusLabel = JBLabel().apply { horizontalAlignment = SwingConstants.LEFT }
+    private val progressBar = JProgressBar().apply {
+        orientation = SwingConstants.HORIZONTAL
+        minimum = 0
+        maximum = 100
+        isVisible = false
+    }
     private val switchButton = JButton()
     private val deleteButton = JButton()
     private val cleanupButton = JButton()
     private val refreshButton = JButton()
+    private val cancelButton = JButton()
+    private val pauseButton = JButton()
+
+    /** Throttle timestamp for table model updates during scanning. */
+    @Volatile
+    private var lastTableUpdateMs = 0L
+
+    /** Minimum interval between table model updates (ms). */
+    private companion object {
+        const val TABLE_UPDATE_THROTTLE_MS = 150L
+    }
 
     init {
         // Configure table
@@ -280,35 +335,156 @@ private class VersionsPanel(private val project: Project) : SimpleToolWindowPane
 
         val scrollPane = com.intellij.ui.components.JBScrollPane(table)
 
+        // Progress area
+        val progressPanel = JBPanel<JBPanel<*>>(BorderLayout(4, 0)).apply {
+            add(progressBar, BorderLayout.CENTER)
+            add(scanStatusLabel, BorderLayout.EAST)
+        }
+
+        // Top info area
+        val topPanel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
+            add(infoLabel, BorderLayout.NORTH)
+            add(progressPanel, BorderLayout.SOUTH)
+        }
+
         // Button panel
         val buttonPanel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
             switchButton.addActionListener { switchVersion() }
             deleteButton.addActionListener { deleteSelectedVersion() }
             cleanupButton.addActionListener { cleanupOldVersions() }
-            refreshButton.addActionListener { refreshVersions() }
+            refreshButton.addActionListener { startAsyncScan() }
+            cancelButton.addActionListener { cancelScan() }
+            pauseButton.addActionListener { togglePause() }
 
             add(switchButton)
             add(deleteButton)
             add(cleanupButton)
             add(refreshButton)
+            add(cancelButton)
+            add(pauseButton)
         }
 
         val mainPanel = JBPanel<JBPanel<*>>(BorderLayout())
-        mainPanel.add(infoLabel, BorderLayout.NORTH)
+        mainPanel.add(topPanel, BorderLayout.NORTH)
         mainPanel.add(scrollPane, BorderLayout.CENTER)
         mainPanel.add(buttonPanel, BorderLayout.SOUTH)
 
         setContent(mainPanel)
-        refreshVersions()
+        updateButtonTexts()
+        startAsyncScan()
     }
 
-    private fun refreshVersions() {
-        val versions = versionService.getInstalledVersions()
-        val currentVersion = wrapperService.getCurrentGradleVersion()
-        tableModel.currentVersion = currentVersion
-        tableModel.versions = versions
+    // ---- Async scan lifecycle ----
 
-        // Update info label
+    /**
+     * Start an asynchronous version scan via [VersionScanManager].
+     * All callbacks are received on the EDT.
+     */
+    private fun startAsyncScan() {
+        setScanUiVisible(true)
+        progressBar.value = 0
+        scanStatusLabel.text = GradleHubBundle.message("toolWindow.scan.starting")
+
+        val distsDir = versionService.getDistsDirectory()
+        lastTableUpdateMs = 0L
+
+        scanManager.startScan(distsDir) { state ->
+            // Callback is already on EDT (guaranteed by VersionScanManager)
+            handleScanState(state)
+        }
+    }
+
+    private fun handleScanState(state: VersionScanManager.ScanState) {
+        when (state) {
+            is VersionScanManager.ScanState.Scanning -> {
+                progressBar.value = (state.progress * 100).toInt()
+                scanStatusLabel.text = GradleHubBundle.message(
+                    "toolWindow.scan.progress",
+                    state.scannedCount,
+                    state.totalCount
+                )
+
+                // Throttled table update
+                val now = System.currentTimeMillis()
+                if (now - lastTableUpdateMs >= TABLE_UPDATE_THROTTLE_MS || state.scannedCount >= state.totalCount) {
+                    lastTableUpdateMs = now
+                    tableModel.currentVersion = wrapperService.getCurrentGradleVersion()
+                    tableModel.replaceVersions(state.partialResults)
+                }
+
+                // Update pause button text
+                pauseButton.text = if (scanManager.isScanPaused) {
+                    GradleHubBundle.message("toolWindow.scan.resume")
+                } else {
+                    GradleHubBundle.message("toolWindow.scan.pause")
+                }
+            }
+
+            is VersionScanManager.ScanState.Completed -> {
+                setScanUiVisible(false)
+                scanStatusLabel.text = ""
+
+                val currentVersion = wrapperService.getCurrentGradleVersion()
+                tableModel.currentVersion = currentVersion
+                tableModel.setVersions(state.versions)
+                updateInfoLabel(state.versions)
+                updateActionButtons()
+            }
+
+            is VersionScanManager.ScanState.Cancelled -> {
+                setScanUiVisible(false)
+                scanStatusLabel.text = GradleHubBundle.message("toolWindow.scan.cancelled")
+
+                if (state.partialResults.isNotEmpty()) {
+                    tableModel.currentVersion = wrapperService.getCurrentGradleVersion()
+                    tableModel.setVersions(state.partialResults)
+                    updateInfoLabel(state.partialResults)
+                }
+                updateActionButtons()
+            }
+
+            is VersionScanManager.ScanState.Error -> {
+                setScanUiVisible(false)
+                scanStatusLabel.text = GradleHubBundle.message("toolWindow.scan.error", state.message)
+
+                tableModel.currentVersion = wrapperService.getCurrentGradleVersion()
+                updateActionButtons()
+            }
+
+            VersionScanManager.ScanState.Idle -> {
+                // No action
+            }
+        }
+    }
+
+    private fun cancelScan() {
+        scanManager.cancelScan()
+    }
+
+    private fun togglePause() {
+        if (scanManager.isScanPaused) {
+            scanManager.resumeScan()
+            pauseButton.text = GradleHubBundle.message("toolWindow.scan.pause")
+        } else {
+            scanManager.pauseScan()
+            pauseButton.text = GradleHubBundle.message("toolWindow.scan.resume")
+        }
+    }
+
+    // ---- UI helpers ----
+
+    private fun setScanUiVisible(scanning: Boolean) {
+        progressBar.isVisible = scanning
+        cancelButton.isVisible = scanning
+        pauseButton.isVisible = scanning
+        pauseButton.text = GradleHubBundle.message("toolWindow.scan.pause")
+        refreshButton.isEnabled = !scanning
+        switchButton.isEnabled = !scanning && table.selectedRow >= 0
+        deleteButton.isEnabled = !scanning && table.selectedRow >= 0
+        cleanupButton.isEnabled = !scanning
+    }
+
+    private fun updateInfoLabel(versions: List<GradleVersionInfo>) {
         if (versions.isEmpty()) {
             infoLabel.text = GradleHubBundle.message("toolWindow.noVersions")
         } else {
@@ -321,13 +497,19 @@ private class VersionsPanel(private val project: Project) : SimpleToolWindowPane
                 GradleVersionInfo.formatFileSize(totalSize)
             )
         }
+    }
 
-        // Update button text and states
+    private fun updateButtonTexts() {
         switchButton.text = GradleHubBundle.message("toolWindow.switchVersion")
         deleteButton.text = GradleHubBundle.message("toolWindow.deleteVersion")
         cleanupButton.text = GradleHubBundle.message("toolWindow.cleanupVersions")
         refreshButton.text = GradleHubBundle.message("toolWindow.refreshVersions")
+        cancelButton.text = GradleHubBundle.message("toolWindow.scan.cancel")
+        pauseButton.text = GradleHubBundle.message("toolWindow.scan.pause")
+    }
 
+    private fun updateActionButtons() {
+        updateButtonTexts()
         val selectedRow = table.selectedRow
         val hasSelection = selectedRow >= 0
         switchButton.isEnabled = hasSelection
@@ -337,6 +519,8 @@ private class VersionsPanel(private val project: Project) : SimpleToolWindowPane
         val deletable = versionService.getDeletableVersions(current)
         cleanupButton.isEnabled = deletable.isNotEmpty()
     }
+
+    // ---- Version actions ----
 
     private fun switchVersion() {
         val selectedRow = table.selectedRow
@@ -351,7 +535,7 @@ private class VersionsPanel(private val project: Project) : SimpleToolWindowPane
         } else {
             infoLabel.text = GradleHubBundle.message("toolWindow.switchFailed")
         }
-        refreshVersions()
+        startAsyncScan()
     }
 
     private fun deleteSelectedVersion() {
@@ -380,7 +564,7 @@ private class VersionsPanel(private val project: Project) : SimpleToolWindowPane
             } else {
                 infoLabel.text = GradleHubBundle.message("toolWindow.deleteFailed", versionInfo.version)
             }
-            refreshVersions()
+            startAsyncScan()
         }
     }
 
@@ -404,13 +588,12 @@ private class VersionsPanel(private val project: Project) : SimpleToolWindowPane
 
         if (confirmed == JOptionPane.YES_OPTION) {
             val deleted = versionService.cleanupOldVersions(currentVersion)
-            val reclaimedSize = deleted.size
             infoLabel.text = GradleHubBundle.message(
                 "toolWindow.cleanupResult",
                 deleted.size,
                 GradleVersionInfo.formatFileSize(totalSize)
             )
-            refreshVersions()
+            startAsyncScan()
         }
     }
 }

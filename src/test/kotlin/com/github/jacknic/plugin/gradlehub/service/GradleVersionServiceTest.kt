@@ -2,6 +2,8 @@ package com.github.jacknic.plugin.gradlehub.service
 
 import com.github.jacknic.plugin.gradlehub.model.GradleVersionInfo
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.nio.file.Files
 
@@ -257,5 +259,100 @@ class GradleVersionServiceTest : BasePlatformTestCase() {
             GradleVersionInfo("6.9", "/path3", 300L, 0L),
         )
         assertEquals(600L, GradleVersionService.calculateTotalSize(versions))
+    }
+
+    // ---- scanVersionsFlow ----
+
+    fun testScanVersionsFlow_emptyDirectory() {
+        val tempDir = Files.createTempDirectory("gradlehub-test").toFile()
+        try {
+            val service = GradleVersionService()
+            val emissions = runBlocking { service.scanVersionsFlow(tempDir).toList() }
+            assertEquals(1, emissions.size)
+            assertTrue(emissions[0].isEmpty())
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
+    fun testScanVersionsFlow_nonExistentDirectory() {
+        val service = GradleVersionService()
+        val emissions = runBlocking { service.scanVersionsFlow(File("/nonexistent/path")).toList() }
+        assertEquals(1, emissions.size)
+        assertTrue(emissions[0].isEmpty())
+    }
+
+    fun testScanVersionsFlow_singleVersion() {
+        val tempDir = Files.createTempDirectory("gradlehub-test").toFile()
+        try {
+            val versionDir = File(tempDir, "8.6")
+            val hashDir = File(versionDir, "abc123")
+            hashDir.mkdirs()
+            File(hashDir, "gradle-8.6-bin.zip").writeText("content")
+
+            val service = GradleVersionService()
+            val emissions = runBlocking { service.scanVersionsFlow(tempDir).toList() }
+            assertTrue(emissions.isNotEmpty())
+            val lastEmission = emissions.last()
+            assertEquals(1, lastEmission.size)
+            assertEquals("8.6", lastEmission[0].version)
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
+    fun testScanVersionsFlow_multipleVersions_emitsIncrementally() {
+        val tempDir = Files.createTempDirectory("gradlehub-test").toFile()
+        try {
+            val v86 = File(tempDir, "8.6")
+            val hash1 = File(v86, "hash1")
+            hash1.mkdirs()
+            File(hash1, "gradle-8.6-bin.zip").writeText("a")
+
+            val v76 = File(tempDir, "7.6")
+            val hash2 = File(v76, "hash2")
+            hash2.mkdirs()
+            File(hash2, "gradle-7.6-bin.zip").writeText("bb")
+
+            val service = GradleVersionService()
+            val emissions = runBlocking { service.scanVersionsFlow(tempDir).toList() }
+
+            // Should emit at least 2 times (once per version directory)
+            assertTrue("Expected at least 2 emissions, got ${emissions.size}", emissions.size >= 2)
+
+            // First emission should have at least 1 version
+            assertTrue(emissions.first().isNotEmpty())
+
+            // Last emission should have all versions
+            val lastEmission = emissions.last()
+            assertEquals(2, lastEmission.size)
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
+    fun testScanVersionsFlow_resultsSortedDescending() {
+        val tempDir = Files.createTempDirectory("gradlehub-test").toFile()
+        try {
+            val v86 = File(tempDir, "8.6")
+            File(File(v86, "hash1"), "gradle-8.6-bin.zip").apply { parentFile.mkdirs(); writeText("a") }
+
+            val v76 = File(tempDir, "7.6")
+            File(File(v76, "hash2"), "gradle-7.6-bin.zip").apply { parentFile.mkdirs(); writeText("bb") }
+
+            val v85 = File(tempDir, "8.5")
+            File(File(v85, "hash3"), "gradle-8.5-bin.zip").apply { parentFile.mkdirs(); writeText("ccc") }
+
+            val service = GradleVersionService()
+            val emissions = runBlocking { service.scanVersionsFlow(tempDir).toList() }
+            val final = emissions.last()
+
+            // Results should be sorted descending by version
+            assertEquals(3, final.size)
+            assertTrue(final[0].version >= final[1].version)
+            assertTrue(final[1].version >= final[2].version)
+        } finally {
+            tempDir.deleteRecursively()
+        }
     }
 }

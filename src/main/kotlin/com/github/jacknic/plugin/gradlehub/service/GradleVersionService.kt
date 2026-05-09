@@ -5,6 +5,10 @@ import com.github.jacknic.plugin.gradlehub.model.GradleVersionInfo
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import java.io.File
 
 /**
@@ -140,6 +144,39 @@ class GradleVersionService {
     fun getInstalledVersions(): List<GradleVersionInfo> {
         return scanVersions(getDistsDirectory())
     }
+
+    /**
+     * Scan versions incrementally, emitting partial results after each version directory.
+     *
+     * This is suitable for reactive consumers (e.g. [VersionScanManager]) that want
+     * to observe progress without blocking.
+     *
+     * The flow runs on [Dispatchers.IO]; collectors should switch context as needed.
+     *
+     * @param distsDir the `wrapper/dists` directory to scan
+     * @return a cold [Flow] that emits accumulated results after each version directory is processed
+     */
+    fun scanVersionsFlow(distsDir: File): Flow<List<GradleVersionInfo>> = flow {
+        if (!distsDir.isDirectory) {
+            emit(emptyList())
+            return@flow
+        }
+        val versionDirs = distsDir.listFiles { file -> file.isDirectory } ?: run {
+            emit(emptyList())
+            return@flow
+        }
+        val results = mutableListOf<GradleVersionInfo>()
+        for (versionDir in versionDirs) {
+            val hashDirs = versionDir.listFiles { file -> file.isDirectory } ?: continue
+            for (hashDir in hashDirs) {
+                val info = GradleVersionInfo.fromDirectory(hashDir)
+                if (info != null) {
+                    results.add(info)
+                }
+            }
+            emit(results.sortedByDescending { it.version })
+        }
+    }.flowOn(Dispatchers.IO)
 
     /**
      * Get versions that can be safely deleted based on retention policy.
