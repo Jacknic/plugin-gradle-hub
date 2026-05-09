@@ -18,6 +18,9 @@
         <projectService serviceImplementation="com.github.jacknic.plugin.gradlehub.service.InitGradleService"/>
         <projectService serviceImplementation="com.github.jacknic.plugin.gradlehub.service.ProxyOrchestrator"/>
 
+        <!-- Application-level services -->
+        <applicationService serviceImplementation="com.github.jacknic.plugin.gradlehub.service.GradleVersionService"/>
+
         <!-- Settings page under Settings → Tools → GradleHub -->
         <applicationConfigurable
                 parentId="tools"

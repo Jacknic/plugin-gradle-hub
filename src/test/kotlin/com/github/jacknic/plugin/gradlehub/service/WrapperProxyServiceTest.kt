@@ -239,6 +239,38 @@ class WrapperProxyServiceTest : BasePlatformTestCase() {
         assertEquals("10000", props.getProperty("networkTimeout"))
     }
 
+    // ---- replaceVersionInUrl ----
+
+    fun testReplaceVersionInUrl_twoPartToTwoPart() {
+        val url = "https://services.gradle.org/distributions/gradle-8.6-bin.zip"
+        val result = WrapperProxyService.replaceVersionInUrl(url, "8.10")
+        assertEquals("https://services.gradle.org/distributions/gradle-8.10-bin.zip", result)
+    }
+
+    fun testReplaceVersionInUrl_twoPartToThreePart() {
+        val url = "https://services.gradle.org/distributions/gradle-8.6-bin.zip"
+        val result = WrapperProxyService.replaceVersionInUrl(url, "7.6.4")
+        assertEquals("https://services.gradle.org/distributions/gradle-7.6.4-bin.zip", result)
+    }
+
+    fun testReplaceVersionInUrl_threePartToTwoPart() {
+        val url = "https://services.gradle.org/distributions/gradle-7.6.4-all.zip"
+        val result = WrapperProxyService.replaceVersionInUrl(url, "8.6")
+        assertEquals("https://services.gradle.org/distributions/gradle-8.6-all.zip", result)
+    }
+
+    fun testReplaceVersionInUrl_mirrorUrl() {
+        val url = "https://mirrors.cloud.tencent.com/gradle/gradle-8.6-bin.zip"
+        val result = WrapperProxyService.replaceVersionInUrl(url, "8.10.2")
+        assertEquals("https://mirrors.cloud.tencent.com/gradle/gradle-8.10.2-bin.zip", result)
+    }
+
+    fun testReplaceVersionInUrl_noMatch() {
+        val url = "https://example.com/something-else.zip"
+        val result = WrapperProxyService.replaceVersionInUrl(url, "8.6")
+        assertEquals(url, result) // No change if pattern doesn't match
+    }
+
     // ---- Integration: full flow ----
 
     fun testFullFlow_parseTransformReplace() {

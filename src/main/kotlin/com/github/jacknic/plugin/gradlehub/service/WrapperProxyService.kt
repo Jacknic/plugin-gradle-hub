@@ -17,6 +17,7 @@ import java.util.Properties
  * - Parse and modify `gradle-wrapper.properties` to replace `distributionUrl` with a mirror URL
  * - Create `.gradlehub.bak` backup before any modification
  * - Restore original configuration from backup when proxy is disabled
+ * - Switch Gradle version by updating `distributionUrl`
  *
  * All pure URL transformation logic is exposed as companion object methods for testability.
  */
@@ -131,6 +132,25 @@ class WrapperProxyService(val project: Project) {
         fun isValidMirrorUrl(url: String): Boolean {
             val trimmed = url.trim()
             return trimmed.startsWith("http://") || trimmed.startsWith("https://")
+        }
+
+        /**
+         * Replace the version in a Gradle distribution URL.
+         *
+         * Example:
+         * - url: `https://services.gradle.org/distributions/gradle-8.6-bin.zip`
+         * - targetVersion: `7.6.4`
+         * - result: `https://services.gradle.org/distributions/gradle-7.6.4-bin.zip`
+         *
+         * @param url the original distribution URL
+         * @param targetVersion the target version string
+         * @return the URL with the new version, or the original URL if parsing fails
+         */
+        fun replaceVersionInUrl(url: String, targetVersion: String): String {
+            val regex = Regex("""(gradle-)(\d+\.\d+(?:\.\d+)?)(-\w+\.zip)""")
+            return regex.replace(url) { match ->
+                match.groupValues[1] + targetVersion + match.groupValues[3]
+            }
         }
 
         /**
@@ -261,7 +281,6 @@ class WrapperProxyService(val project: Project) {
         }
 
         val newContent = replaceDistributionUrl(content, newUrl)
-        val finalContent = newContent
 
         try {
             WriteCommandAction.runWriteCommandAction(project) {
@@ -277,7 +296,7 @@ class WrapperProxyService(val project: Project) {
                     }
                 }
                 // Write modified content
-                VfsUtil.saveText(file, finalContent)
+                VfsUtil.saveText(file, newContent)
                 LOG.info("Applied mirror proxy: $originalUrl → $newUrl")
             }
             return true
@@ -345,5 +364,73 @@ class WrapperProxyService(val project: Project) {
      */
     fun toggleProxy(): Boolean {
         return if (isProxyApplied()) restoreOriginal() else applyProxy()
+    }
+
+    /**
+     * Switch the project's Gradle version by updating `gradle-wrapper.properties`.
+     *
+     * If a mirror proxy is currently applied, the switch is performed on the backup
+     * (original) file first, then the proxy is re-applied with the new version.
+     *
+     * @param targetVersion the target Gradle version string (e.g. "8.6")
+     * @return true if the version was successfully switched, false otherwise
+     */
+    fun switchToVersion(targetVersion: String): Boolean {
+        val file = findWrapperPropertiesFile()
+        if (file == null) {
+            LOG.warn("gradle-wrapper.properties not found in project: ${project.name}")
+            return false
+        }
+
+        val wasProxyApplied = isProxyApplied()
+
+        // If proxy is applied, work on the original content
+        val effectiveContent = if (wasProxyApplied) {
+            val parent = file.parent ?: return false
+            val backupFile = parent.findChild(file.name + BACKUP_SUFFIX) ?: return false
+            String(backupFile.contentsToByteArray(), Charsets.UTF_8)
+        } else {
+            String(file.contentsToByteArray(), Charsets.UTF_8)
+        }
+
+        val currentUrl = parseDistributionUrl(effectiveContent)
+        if (currentUrl == null) {
+            LOG.warn("distributionUrl not found in gradle-wrapper.properties")
+            return false
+        }
+
+        val currentVersion = parseVersionFromUrl(currentUrl)
+        if (currentVersion == targetVersion) {
+            LOG.info("Project already uses Gradle $targetVersion")
+            return false
+        }
+
+        val newUrl = replaceVersionInUrl(currentUrl, targetVersion)
+        val newContent = replaceDistributionUrl(effectiveContent, newUrl)
+        val settings = GradleHubSettings.getInstance()
+
+        try {
+            WriteCommandAction.runWriteCommandAction(project) {
+                if (wasProxyApplied) {
+                    // Update the backup with the new version
+                    val parent = file.parent ?: return@runWriteCommandAction
+                    val backupFile = parent.findChild(file.name + BACKUP_SUFFIX)
+                    if (backupFile != null) {
+                        VfsUtil.saveText(backupFile, newContent)
+                    }
+                    // Re-apply proxy with new version
+                    val proxyUrl = transformUrl(newUrl, settings.mirrorUrl)
+                    val proxiedContent = replaceDistributionUrl(newContent, proxyUrl)
+                    VfsUtil.saveText(file, proxiedContent)
+                } else {
+                    VfsUtil.saveText(file, newContent)
+                }
+                LOG.info("Switched Gradle version from $currentVersion to $targetVersion")
+            }
+            return true
+        } catch (e: Exception) {
+            LOG.error("Failed to switch Gradle version", e)
+            return false
+        }
     }
 }
