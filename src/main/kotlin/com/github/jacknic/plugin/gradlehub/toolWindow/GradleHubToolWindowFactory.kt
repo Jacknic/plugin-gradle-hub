@@ -8,6 +8,7 @@ import com.github.jacknic.plugin.gradlehub.service.GradleVersionService
 import com.github.jacknic.plugin.gradlehub.service.ProxyOrchestrator
 import com.github.jacknic.plugin.gradlehub.service.WrapperProxyService
 import com.github.jacknic.plugin.gradlehub.service.InitGradleService
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.SimpleToolWindowPanel
@@ -104,28 +105,46 @@ private class ProxyPanel(project: Project) : SimpleToolWindowPanel(false, true) 
 
         val buttonPanel = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
             applyAllButton.addActionListener {
-                orchestrator.applyAll()
-                refresh()
+                setButtonsEnabled(false)
+                ApplicationManager.getApplication().executeOnPooledThread {
+                    orchestrator.applyAll()
+                    ApplicationManager.getApplication().invokeLater { refresh() }
+                }
             }
             restoreAllButton.addActionListener {
-                orchestrator.restoreAll()
-                refresh()
+                setButtonsEnabled(false)
+                ApplicationManager.getApplication().executeOnPooledThread {
+                    orchestrator.restoreAll()
+                    ApplicationManager.getApplication().invokeLater { refresh() }
+                }
             }
             applyWrapperButton.addActionListener {
-                wrapperService.applyProxy()
-                refresh()
+                setButtonsEnabled(false)
+                ApplicationManager.getApplication().executeOnPooledThread {
+                    wrapperService.applyProxy()
+                    ApplicationManager.getApplication().invokeLater { refresh() }
+                }
             }
             restoreWrapperButton.addActionListener {
-                wrapperService.restoreOriginal()
-                refresh()
+                setButtonsEnabled(false)
+                ApplicationManager.getApplication().executeOnPooledThread {
+                    wrapperService.restoreOriginal()
+                    ApplicationManager.getApplication().invokeLater { refresh() }
+                }
             }
             applyInitGradleButton.addActionListener {
-                project.service<InitGradleService>().applyProxy()
-                refresh()
+                setButtonsEnabled(false)
+                ApplicationManager.getApplication().executeOnPooledThread {
+                    project.service<InitGradleService>().applyProxy()
+                    ApplicationManager.getApplication().invokeLater { refresh() }
+                }
             }
             restoreInitGradleButton.addActionListener {
-                project.service<InitGradleService>().restoreOriginal()
-                refresh()
+                setButtonsEnabled(false)
+                ApplicationManager.getApplication().executeOnPooledThread {
+                    project.service<InitGradleService>().restoreOriginal()
+                    ApplicationManager.getApplication().invokeLater { refresh() }
+                }
             }
             refreshButton.addActionListener { refresh() }
 
@@ -147,69 +166,86 @@ private class ProxyPanel(project: Project) : SimpleToolWindowPanel(false, true) 
     }
 
     fun refresh() {
-        val status = orchestrator.getStatus()
+        setButtonsEnabled(false)
 
-        val version = wrapperService.getCurrentGradleVersion()
-        versionLabel.text = GradleHubBundle.message("toolWindow.version", version ?: "N/A")
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val status = orchestrator.getStatus()
+            val version = wrapperService.getCurrentGradleVersion()
+            val currentUrl = wrapperService.getCurrentDistributionUrl()
 
-        val wrapperStatus = if (status.wrapperApplied) {
-            GradleHubBundle.message("toolWindow.proxyApplied")
-        } else {
-            GradleHubBundle.message("toolWindow.proxyNotApplied")
+            ApplicationManager.getApplication().invokeLater {
+                versionLabel.text = GradleHubBundle.message("toolWindow.version", version ?: "N/A")
+
+                val wrapperStatus = if (status.wrapperApplied) {
+                    GradleHubBundle.message("toolWindow.proxyApplied")
+                } else {
+                    GradleHubBundle.message("toolWindow.proxyNotApplied")
+                }
+                wrapperStatusLabel.text = GradleHubBundle.message("toolWindow.wrapperStatus", wrapperStatus)
+
+                val repoStatus = if (status.repositoryApplied) {
+                    GradleHubBundle.message("toolWindow.proxyApplied")
+                } else {
+                    GradleHubBundle.message("toolWindow.proxyNotApplied")
+                }
+                repositoryStatusLabel.text = GradleHubBundle.message("toolWindow.repositoryStatus", repoStatus)
+
+                val initStatus = if (status.initGradleApplied) {
+                    GradleHubBundle.message("toolWindow.proxyApplied")
+                } else {
+                    GradleHubBundle.message("toolWindow.proxyNotApplied")
+                }
+                initGradleStatusLabel.text = GradleHubBundle.message("toolWindow.initGradleStatus", initStatus)
+
+                val mirrorDisplay = settings.mirrorUrl.ifBlank {
+                    GradleHubBundle.message("toolWindow.notConfigured")
+                }
+                mirrorUrlLabel.text = GradleHubBundle.message("toolWindow.mirrorUrl", mirrorDisplay)
+
+                val repoMirrorDisplay = settings.repositoryMirrorUrl.ifBlank {
+                    GradleHubBundle.message("toolWindow.notConfigured")
+                }
+                repoMirrorUrlLabel.text = GradleHubBundle.message("toolWindow.repoMirrorUrl", repoMirrorDisplay)
+
+                distributionUrlLabel.text = GradleHubBundle.message("toolWindow.distributionUrl", currentUrl ?: "N/A")
+
+                val canApplyWrapper = !status.wrapperApplied && status.mirrorEnabled && settings.mirrorUrl.isNotBlank()
+                val canApplyRepo = !status.repositoryApplied && status.mirrorEnabled && status.repositoryProxyEnabled && settings.repositoryMirrorUrl.isNotBlank()
+                val canApplyInitGradle = !status.initGradleApplied && status.mirrorEnabled && status.initGradleEnabled && settings.repositoryMirrorUrl.isNotBlank()
+                val canApplyAny = canApplyWrapper || canApplyRepo || canApplyInitGradle
+
+                applyAllButton.text = GradleHubBundle.message("toolWindow.applyAll")
+                applyAllButton.isEnabled = canApplyAny
+
+                restoreAllButton.text = GradleHubBundle.message("toolWindow.restoreAll")
+                restoreAllButton.isEnabled = status.anyApplied
+
+                applyWrapperButton.text = GradleHubBundle.message("toolWindow.applyProxy")
+                applyWrapperButton.isEnabled = canApplyWrapper
+
+                restoreWrapperButton.text = GradleHubBundle.message("toolWindow.restoreOriginal")
+                restoreWrapperButton.isEnabled = status.wrapperApplied
+
+                applyInitGradleButton.text = GradleHubBundle.message("toolWindow.applyInitGradle")
+                applyInitGradleButton.isEnabled = canApplyInitGradle
+
+                restoreInitGradleButton.text = GradleHubBundle.message("toolWindow.restoreInitGradle")
+                restoreInitGradleButton.isEnabled = status.initGradleApplied
+
+                refreshButton.text = GradleHubBundle.message("toolWindow.refresh")
+                refreshButton.isEnabled = true
+            }
         }
-        wrapperStatusLabel.text = GradleHubBundle.message("toolWindow.wrapperStatus", wrapperStatus)
+    }
 
-        val repoStatus = if (status.repositoryApplied) {
-            GradleHubBundle.message("toolWindow.proxyApplied")
-        } else {
-            GradleHubBundle.message("toolWindow.proxyNotApplied")
-        }
-        repositoryStatusLabel.text = GradleHubBundle.message("toolWindow.repositoryStatus", repoStatus)
-
-        val initStatus = if (status.initGradleApplied) {
-            GradleHubBundle.message("toolWindow.proxyApplied")
-        } else {
-            GradleHubBundle.message("toolWindow.proxyNotApplied")
-        }
-        initGradleStatusLabel.text = GradleHubBundle.message("toolWindow.initGradleStatus", initStatus)
-
-        val mirrorDisplay = settings.mirrorUrl.ifBlank {
-            GradleHubBundle.message("toolWindow.notConfigured")
-        }
-        mirrorUrlLabel.text = GradleHubBundle.message("toolWindow.mirrorUrl", mirrorDisplay)
-
-        val repoMirrorDisplay = settings.repositoryMirrorUrl.ifBlank {
-            GradleHubBundle.message("toolWindow.notConfigured")
-        }
-        repoMirrorUrlLabel.text = GradleHubBundle.message("toolWindow.repoMirrorUrl", repoMirrorDisplay)
-
-        val currentUrl = wrapperService.getCurrentDistributionUrl() ?: "N/A"
-        distributionUrlLabel.text = GradleHubBundle.message("toolWindow.distributionUrl", currentUrl)
-
-        val canApplyWrapper = !status.wrapperApplied && status.mirrorEnabled && settings.mirrorUrl.isNotBlank()
-        val canApplyRepo = !status.repositoryApplied && status.mirrorEnabled && status.repositoryProxyEnabled && settings.repositoryMirrorUrl.isNotBlank()
-        val canApplyInitGradle = !status.initGradleApplied && status.mirrorEnabled && status.initGradleEnabled && settings.repositoryMirrorUrl.isNotBlank()
-        val canApplyAny = canApplyWrapper || canApplyRepo || canApplyInitGradle
-
-        applyAllButton.text = GradleHubBundle.message("toolWindow.applyAll")
-        applyAllButton.isEnabled = canApplyAny
-
-        restoreAllButton.text = GradleHubBundle.message("toolWindow.restoreAll")
-        restoreAllButton.isEnabled = status.anyApplied
-
-        applyWrapperButton.text = GradleHubBundle.message("toolWindow.applyProxy")
-        applyWrapperButton.isEnabled = canApplyWrapper
-
-        restoreWrapperButton.text = GradleHubBundle.message("toolWindow.restoreOriginal")
-        restoreWrapperButton.isEnabled = status.wrapperApplied
-
-        applyInitGradleButton.text = GradleHubBundle.message("toolWindow.applyInitGradle")
-        applyInitGradleButton.isEnabled = canApplyInitGradle
-
-        restoreInitGradleButton.text = GradleHubBundle.message("toolWindow.restoreInitGradle")
-        restoreInitGradleButton.isEnabled = status.initGradleApplied
-
-        refreshButton.text = GradleHubBundle.message("toolWindow.refresh")
+    private fun setButtonsEnabled(enabled: Boolean) {
+        applyAllButton.isEnabled = enabled
+        restoreAllButton.isEnabled = enabled
+        applyWrapperButton.isEnabled = enabled
+        restoreWrapperButton.isEnabled = enabled
+        applyInitGradleButton.isEnabled = enabled
+        restoreInitGradleButton.isEnabled = enabled
+        refreshButton.isEnabled = enabled
     }
 }
 
@@ -295,6 +331,10 @@ private class VersionsPanel(private val project: Project) : SimpleToolWindowPane
     private val versionService = GradleVersionService.getInstance()
     private val wrapperService = project.service<WrapperProxyService>()
     private val settings = GradleHubSettings.getInstance()
+
+    /** Cached current Gradle version, updated off-EDT to avoid blocking I/O. */
+    @Volatile
+    private var cachedCurrentVersion: String? = null
 
     private val tableModel = GradleVersionTableModel()
     private val table = JBTable(tableModel)
@@ -392,9 +432,16 @@ private class VersionsPanel(private val project: Project) : SimpleToolWindowPane
         val distsDir = versionService.getDistsDirectory()
         lastTableUpdateMs = 0L
 
-        scanManager.startScan(distsDir) { state ->
-            // Callback is already on EDT (guaranteed by VersionScanManager)
-            handleScanState(state)
+        // Pre-fetch current version on a background thread to avoid EDT I/O
+        ApplicationManager.getApplication().executeOnPooledThread {
+            cachedCurrentVersion = wrapperService.getCurrentGradleVersion()
+
+            ApplicationManager.getApplication().invokeLater {
+                scanManager.startScan(distsDir) { state ->
+                    // Callback is already on EDT (guaranteed by VersionScanManager)
+                    handleScanState(state)
+                }
+            }
         }
     }
 
@@ -412,7 +459,7 @@ private class VersionsPanel(private val project: Project) : SimpleToolWindowPane
                 val now = System.currentTimeMillis()
                 if (now - lastTableUpdateMs >= TABLE_UPDATE_THROTTLE_MS || state.scannedCount >= state.totalCount) {
                     lastTableUpdateMs = now
-                    tableModel.currentVersion = wrapperService.getCurrentGradleVersion()
+                    tableModel.currentVersion = cachedCurrentVersion
                     tableModel.replaceVersions(state.partialResults)
                 }
 
@@ -428,8 +475,7 @@ private class VersionsPanel(private val project: Project) : SimpleToolWindowPane
                 setScanUiVisible(false)
                 scanStatusLabel.text = ""
 
-                val currentVersion = wrapperService.getCurrentGradleVersion()
-                tableModel.currentVersion = currentVersion
+                tableModel.currentVersion = cachedCurrentVersion
                 tableModel.setVersions(state.versions)
                 updateInfoLabel(state.versions)
                 updateActionButtons()
@@ -440,7 +486,7 @@ private class VersionsPanel(private val project: Project) : SimpleToolWindowPane
                 scanStatusLabel.text = GradleHubBundle.message("toolWindow.scan.cancelled")
 
                 if (state.partialResults.isNotEmpty()) {
-                    tableModel.currentVersion = wrapperService.getCurrentGradleVersion()
+                    tableModel.currentVersion = cachedCurrentVersion
                     tableModel.setVersions(state.partialResults)
                     updateInfoLabel(state.partialResults)
                 }
@@ -451,7 +497,7 @@ private class VersionsPanel(private val project: Project) : SimpleToolWindowPane
                 setScanUiVisible(false)
                 scanStatusLabel.text = GradleHubBundle.message("toolWindow.scan.error", state.message)
 
-                tableModel.currentVersion = wrapperService.getCurrentGradleVersion()
+                tableModel.currentVersion = cachedCurrentVersion
                 updateActionButtons()
             }
 
@@ -521,8 +567,8 @@ private class VersionsPanel(private val project: Project) : SimpleToolWindowPane
         switchButton.isEnabled = hasSelection
         deleteButton.isEnabled = hasSelection
 
-        val current = wrapperService.getCurrentGradleVersion()
-        val deletable = versionService.getDeletableVersions(current)
+        val current = cachedCurrentVersion
+        val deletable = GradleVersionService.findDeletableVersions(tableModel.versions, current, settings.keepVersions)
         cleanupButton.isEnabled = deletable.isNotEmpty()
         downloadButton.isEnabled = true
     }
@@ -536,13 +582,21 @@ private class VersionsPanel(private val project: Project) : SimpleToolWindowPane
         val modelRow = table.convertRowIndexToModel(selectedRow)
         val versionInfo = tableModel.getVersionAt(modelRow) ?: return
 
-        val success = wrapperService.switchToVersion(versionInfo.version)
-        if (success) {
-            infoLabel.text = GradleHubBundle.message("toolWindow.switchSuccess", versionInfo.version)
-        } else {
-            infoLabel.text = GradleHubBundle.message("toolWindow.switchFailed")
+        setScanUiVisible(true)
+        switchButton.isEnabled = false
+        infoLabel.text = GradleHubBundle.message("toolWindow.switchVersion") + "..."
+
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val success = wrapperService.switchToVersion(versionInfo.version)
+            ApplicationManager.getApplication().invokeLater {
+                if (success) {
+                    infoLabel.text = GradleHubBundle.message("toolWindow.switchSuccess", versionInfo.version)
+                } else {
+                    infoLabel.text = GradleHubBundle.message("toolWindow.switchFailed")
+                }
+                startAsyncScan()
+            }
         }
-        startAsyncScan()
     }
 
     private fun deleteSelectedVersion() {
@@ -553,8 +607,7 @@ private class VersionsPanel(private val project: Project) : SimpleToolWindowPane
         val versionInfo = tableModel.getVersionAt(modelRow) ?: return
 
         // Don't delete current project version
-        val currentVersion = wrapperService.getCurrentGradleVersion()
-        if (versionInfo.version == currentVersion) return
+        if (versionInfo.version == cachedCurrentVersion) return
 
         val confirmed = JOptionPane.showConfirmDialog(
             this,
@@ -565,19 +618,26 @@ private class VersionsPanel(private val project: Project) : SimpleToolWindowPane
         )
 
         if (confirmed == JOptionPane.YES_OPTION) {
-            val deleted = GradleVersionService.deleteVersion(versionInfo)
-            if (deleted) {
-                infoLabel.text = GradleHubBundle.message("toolWindow.deleteSuccess", versionInfo.version)
-            } else {
-                infoLabel.text = GradleHubBundle.message("toolWindow.deleteFailed", versionInfo.version)
+            setScanUiVisible(true)
+            deleteButton.isEnabled = false
+
+            ApplicationManager.getApplication().executeOnPooledThread {
+                val deleted = GradleVersionService.deleteVersion(versionInfo)
+                ApplicationManager.getApplication().invokeLater {
+                    if (deleted) {
+                        infoLabel.text = GradleHubBundle.message("toolWindow.deleteSuccess", versionInfo.version)
+                    } else {
+                        infoLabel.text = GradleHubBundle.message("toolWindow.deleteFailed", versionInfo.version)
+                    }
+                    startAsyncScan()
+                }
             }
-            startAsyncScan()
         }
     }
 
     private fun cleanupOldVersions() {
-        val currentVersion = wrapperService.getCurrentGradleVersion()
-        val deletable = versionService.getDeletableVersions(currentVersion)
+        val currentVersion = cachedCurrentVersion
+        val deletable = GradleVersionService.findDeletableVersions(tableModel.versions, currentVersion, settings.keepVersions)
         if (deletable.isEmpty()) return
 
         val totalSize = GradleVersionService.calculateTotalSize(deletable)
@@ -594,13 +654,20 @@ private class VersionsPanel(private val project: Project) : SimpleToolWindowPane
         )
 
         if (confirmed == JOptionPane.YES_OPTION) {
-            val deleted = versionService.cleanupOldVersions(currentVersion)
-            infoLabel.text = GradleHubBundle.message(
-                "toolWindow.cleanupResult",
-                deleted.size,
-                GradleVersionInfo.formatFileSize(totalSize)
-            )
-            startAsyncScan()
+            setScanUiVisible(true)
+            cleanupButton.isEnabled = false
+
+            ApplicationManager.getApplication().executeOnPooledThread {
+                val deleted = versionService.cleanupOldVersions(currentVersion, tableModel.versions)
+                ApplicationManager.getApplication().invokeLater {
+                    infoLabel.text = GradleHubBundle.message(
+                        "toolWindow.cleanupResult",
+                        deleted.size,
+                        GradleVersionInfo.formatFileSize(totalSize)
+                    )
+                    startAsyncScan()
+                }
+            }
         }
     }
 

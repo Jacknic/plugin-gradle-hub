@@ -284,15 +284,22 @@ class DownloadVersionDialog(private val project: Project) : DialogWrapper(projec
     private fun switchToDownloadedVersion() {
         val version = downloadedVersion ?: return
 
-        val success = wrapperService.switchToVersion(version)
-        if (success) {
-            statusLabel.text = GradleHubBundle.message("download.switchSuccess", version)
-        } else {
-            statusLabel.text = GradleHubBundle.message("download.switchFailed")
-        }
+        switchButton.isEnabled = false
+        statusLabel.text = GradleHubBundle.message("download.switchToVersion") + "..."
 
-        // Close the dialog after switching
-        close(OK_EXIT_CODE)
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val success = wrapperService.switchToVersion(version)
+            ApplicationManager.getApplication().invokeLater {
+                if (success) {
+                    statusLabel.text = GradleHubBundle.message("download.switchSuccess", version)
+                } else {
+                    statusLabel.text = GradleHubBundle.message("download.switchFailed")
+                }
+
+                // Close the dialog after switching
+                close(OK_EXIT_CODE)
+            }
+        }
     }
 
     // ---- Dialog lifecycle ----

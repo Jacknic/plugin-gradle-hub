@@ -197,6 +197,22 @@ class GradleVersionService {
      */
     fun cleanupOldVersions(currentVersion: String?): List<String> {
         val deletable = getDeletableVersions(currentVersion)
+        return doCleanup(deletable)
+    }
+
+    /**
+     * Perform cleanup using pre-scanned versions, avoiding redundant disk I/O.
+     *
+     * @param currentVersion the version currently used by the project
+     * @param installedVersions the already-scanned list of installed versions
+     * @return list of deleted version strings
+     */
+    fun cleanupOldVersions(currentVersion: String?, installedVersions: List<GradleVersionInfo>): List<String> {
+        val deletable = findDeletableVersions(installedVersions, currentVersion, settings.keepVersions)
+        return doCleanup(deletable)
+    }
+
+    private fun doCleanup(deletable: List<GradleVersionInfo>): List<String> {
         val deleted = mutableListOf<String>()
         for (version in deletable) {
             if (deleteVersion(version)) {
