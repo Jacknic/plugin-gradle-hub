@@ -223,8 +223,7 @@ class DownloadVersionDialog(private val project: Project) : DialogWrapper(projec
         if (version.isBlank()) return
 
         // Validate version format
-        val versionRegex = Regex("""^\d+\.\d+(?:\.\d+)?$""")
-        if (!versionRegex.matches(version)) {
+        if (!RemoteGradleVersion.STABLE_VERSION_PATTERN.matches(version)) {
             statusLabel.text = GradleHubBundle.message("download.invalidVersion")
             return
         }

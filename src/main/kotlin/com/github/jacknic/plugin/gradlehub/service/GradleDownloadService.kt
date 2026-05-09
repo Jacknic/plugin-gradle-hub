@@ -171,7 +171,7 @@ class GradleDownloadService {
          * Parse the remote versions JSON from the Gradle releases API.
          *
          * The API returns a JSON array of objects with fields like:
-         * `version`, `downloadUrl`, `current`, `snapshot`, `broken`, etc.
+         * `version`, `downloadUrl`, `current`, `snapshot`, `nightly`, `broken`, etc.
          *
          * @param json the raw JSON string from the API
          * @return a list of [RemoteGradleVersion], sorted by version descending with current first
@@ -180,7 +180,7 @@ class GradleDownloadService {
             val versions = mutableListOf<RemoteGradleVersion>()
             val objectPattern = Regex("""\{([^}]*(?:\{[^}]*\}[^}]*)*)\}""")
             val fieldStringPattern = Regex(""""(\w+)"\s*:\s*"([^"]*)"""")
-            val fieldBoolPattern = Regex(""""(\w+)"\s*:\s*(true|false)""")
+            val fieldBoolPattern = Regex(""""(\w+)"\s*:\s*(true|false)"""")
 
             for (match in objectPattern.findAll(json)) {
                 val obj = match.groupValues[1]
@@ -196,6 +196,7 @@ class GradleDownloadService {
 
                 val version = stringFields["version"] ?: continue
                 val downloadUrl = stringFields["downloadUrl"] ?: buildDistributionUrl(version)
+                val isNightly = (boolFields["nightly"] ?: false) || (boolFields["releaseNightly"] ?: false)
 
                 versions.add(RemoteGradleVersion(
                     version = version,
@@ -203,13 +204,48 @@ class GradleDownloadService {
                     isCurrent = boolFields["current"] ?: false,
                     isSnapshot = boolFields["snapshot"] ?: false,
                     isBroken = boolFields["broken"] ?: false,
+                    isNightly = isNightly,
                 ))
             }
 
             return versions.sortedWith(
-                compareByDescending<RemoteGradleVersion> { it.isCurrent }
-                    .thenByDescending { it.version }
+                Comparator<RemoteGradleVersion> { a, b ->
+                    val cmp = b.isCurrent.compareTo(a.isCurrent)
+                    if (cmp != 0) cmp else compareVersions(b.version, a.version)
+                }
             )
+        }
+
+        /**
+         * Compare two version strings semantically for sorting.
+         *
+         * Parses version strings like "8.14.5", "9.0" and compares numerically.
+         * This ensures correct ordering: 9.5.0 > 8.14.5 > 8.9 > 8.7
+         * Stable versions (no suffix) sort before pre-release versions with the same numeric prefix.
+         *
+         * @param v1 the first version string
+         * @param v2 the second version string
+         * @return negative if v1 < v2, zero if equal, positive if v1 > v2
+         */
+        private fun compareVersions(v1: String, v2: String): Int {
+            val parts1 = v1.split("-", limit = 2)
+            val parts2 = v2.split("-", limit = 2)
+            val nums1 = parts1[0].split(".").map { it.toIntOrNull() ?: 0 }
+            val nums2 = parts2[0].split(".").map { it.toIntOrNull() ?: 0 }
+            val maxSize = maxOf(nums1.size, nums2.size)
+            for (i in 0 until maxSize) {
+                val n1 = nums1.getOrElse(i) { 0 }
+                val n2 = nums2.getOrElse(i) { 0 }
+                if (n1 != n2) return n1.compareTo(n2)
+            }
+            // Same numeric prefix: stable (no suffix) sorts before pre-release
+            val hasSuffix1 = parts1.size > 1
+            val hasSuffix2 = parts2.size > 1
+            return when {
+                !hasSuffix1 && hasSuffix2 -> 1  // stable > pre-release
+                hasSuffix1 && !hasSuffix2 -> -1 // pre-release < stable
+                else -> 0
+            }
         }
 
         /**
@@ -377,28 +413,33 @@ class GradleDownloadService {
     /**
      * Fetch available Gradle versions from the remote API.
      *
-     * Filters out broken versions and snapshots by default, returning only
-     * stable releases sorted with the current release first.
+     * Filters out broken, snapshot, nightly, RC, and milestone versions by default,
+     * returning only stable releases sorted with the current release first.
      *
      * @return a list of available remote versions, or empty list on failure
      */
     fun fetchRemoteVersions(): List<RemoteGradleVersion> {
+        var connection: HttpURLConnection? = null
         return try {
-            val connection = URI(GRADLE_VERSIONS_API).toURL().openConnection() as HttpURLConnection
+            connection = URI(GRADLE_VERSIONS_API).toURL().openConnection() as HttpURLConnection
             connection.connectTimeout = 15_000
             connection.readTimeout = 30_000
             connection.instanceFollowRedirects = true
 
-            try {
-                val json = connection.inputStream.bufferedReader().use { it.readText() }
-                parseRemoteVersions(json)
-                    .filter { !it.isBroken && !it.isSnapshot }
-            } finally {
-                connection.disconnect()
+            val responseCode = connection.responseCode
+            if (responseCode != HttpURLConnection.HTTP_OK) {
+                LOG.warn("Failed to fetch Gradle versions: HTTP $responseCode")
+                return emptyList()
             }
+
+            val json = connection.inputStream.bufferedReader().use { it.readText() }
+            parseRemoteVersions(json)
+                .filter { it.isStable }
         } catch (e: Exception) {
             LOG.warn("Failed to fetch remote Gradle versions", e)
             emptyList()
+        } finally {
+            connection?.disconnect()
         }
     }
 

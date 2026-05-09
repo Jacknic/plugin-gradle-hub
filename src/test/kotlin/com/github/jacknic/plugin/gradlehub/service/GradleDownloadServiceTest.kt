@@ -139,6 +139,40 @@ class GradleDownloadServiceTest : BasePlatformTestCase() {
         val result = GradleDownloadService.parseRemoteVersions(json)
         assertEquals(1, result.size)
         assertTrue(result[0].isSnapshot)
+        assertFalse(result[0].isStable)
+    }
+
+    fun testParseRemoteVersions_nightlyVersion() {
+        val json = """[{"version":"9.6.0-20260509002831+0000","downloadUrl":"","current":false,"snapshot":true,"nightly":true,"releaseNightly":false,"broken":false}]"""
+        val result = GradleDownloadService.parseRemoteVersions(json)
+        assertEquals(1, result.size)
+        assertTrue(result[0].isNightly)
+        assertFalse(result[0].isStable)
+    }
+
+    fun testParseRemoteVersions_rcVersion() {
+        val json = """[{"version":"9.5.0-rc-4","downloadUrl":"","current":false,"snapshot":false,"nightly":false,"releaseNightly":false,"broken":false}]"""
+        val result = GradleDownloadService.parseRemoteVersions(json)
+        assertEquals(1, result.size)
+        assertFalse(result[0].isSnapshot)
+        assertFalse(result[0].isNightly)
+        // RC versions are not stable (version contains "-")
+        assertFalse(result[0].isStable)
+    }
+
+    fun testParseRemoteVersions_milestoneVersion() {
+        val json = """[{"version":"9.6.0-milestone-1","downloadUrl":"","current":false,"snapshot":false,"nightly":false,"releaseNightly":false,"broken":false}]"""
+        val result = GradleDownloadService.parseRemoteVersions(json)
+        assertEquals(1, result.size)
+        // Milestone versions are not stable (version contains "-")
+        assertFalse(result[0].isStable)
+    }
+
+    fun testParseRemoteVersions_stableVersion() {
+        val json = """[{"version":"8.14.5","downloadUrl":"","current":false,"snapshot":false,"nightly":false,"releaseNightly":false,"broken":false}]"""
+        val result = GradleDownloadService.parseRemoteVersions(json)
+        assertEquals(1, result.size)
+        assertTrue(result[0].isStable)
     }
 
     fun testParseRemoteVersions_missingDownloadUrl() {
@@ -159,19 +193,27 @@ class GradleDownloadServiceTest : BasePlatformTestCase() {
         val json = """[
             {"version":"7.6","downloadUrl":"","current":false,"snapshot":false,"broken":false},
             {"version":"8.7","downloadUrl":"","current":true,"snapshot":false,"broken":false},
-            {"version":"8.6","downloadUrl":"","current":false,"snapshot":false,"broken":false}
+            {"version":"8.6","downloadUrl":"","current":false,"snapshot":false,"broken":false},
+            {"version":"8.14","downloadUrl":"","current":false,"snapshot":false,"broken":false},
+            {"version":"8.9","downloadUrl":"","current":false,"snapshot":false,"broken":false}
         ]"""
         val result = GradleDownloadService.parseRemoteVersions(json)
         // Current version should be first
         assertTrue(result[0].isCurrent)
         assertEquals("8.7", result[0].version)
+        // Semantic version sorting: 8.14 > 8.9 > 8.6 > 7.6
+        assertEquals("8.14", result[1].version)
+        assertEquals("8.9", result[2].version)
+        assertEquals("8.6", result[3].version)
+        assertEquals("7.6", result[4].version)
     }
 
     fun testParseRemoteVersions_realApiFormat() {
         val json = """[
   {
-    "version" : "8.7",
-    "buildTime" : "20240614093642",
+    "version" : "9.5.0",
+    "buildTime" : "20260428120530+0000",
+    "commitId" : "3fe117d68f3907790f3809f121aa36303a9151f8",
     "current" : true,
     "snapshot" : false,
     "nightly" : false,
@@ -180,13 +222,16 @@ class GradleDownloadServiceTest : BasePlatformTestCase() {
     "rcFor" : "",
     "milestoneFor" : "",
     "broken" : false,
-    "downloadUrl" : "https://services.gradle.org/distributions/gradle-8.7-bin.zip",
-    "checksumUrl" : "https://services.gradle.org/distributions/gradle-8.7-bin.zip.sha256",
-    "wrapperChecksumUrl" : "https://services.gradle.org/distributions/gradle-8.7-wrapper.jar.sha256"
+    "downloadUrl" : "https://services.gradle.org/distributions/gradle-9.5.0-bin.zip",
+    "checksumUrl" : "https://services.gradle.org/distributions/gradle-9.5.0-bin.zip.sha256",
+    "checksum" : "553c78f50dafcd54d65b9a444649057857469edf836431389695608536d6b746",
+    "wrapperChecksumUrl" : "https://services.gradle.org/distributions/gradle-9.5.0-wrapper.jar.sha256",
+    "wrapperChecksum" : "497c8c2a7e5031f6aa847f88104aa80a93532ec32ee17bdb8d1d2f67a194a9c7"
   },
   {
-    "version" : "8.6",
-    "buildTime" : "20240202155015",
+    "version" : "8.14.5",
+    "buildTime" : "20260507110329+0000",
+    "commitId" : "62345becae08b13e793521816d585102fea66398",
     "current" : false,
     "snapshot" : false,
     "nightly" : false,
@@ -195,17 +240,22 @@ class GradleDownloadServiceTest : BasePlatformTestCase() {
     "rcFor" : "",
     "milestoneFor" : "",
     "broken" : false,
-    "downloadUrl" : "https://services.gradle.org/distributions/gradle-8.6-bin.zip",
-    "checksumUrl" : "https://services.gradle.org/distributions/gradle-8.6-bin.zip.sha256",
-    "wrapperChecksumUrl" : "https://services.gradle.org/distributions/gradle-8.6-wrapper.jar.sha256"
+    "downloadUrl" : "https://services.gradle.org/distributions/gradle-8.14.5-bin.zip",
+    "checksumUrl" : "https://services.gradle.org/distributions/gradle-8.14.5-bin.zip.sha256",
+    "checksum" : "6f74b601422d6d6fc4e1f9a1ab6522f642c2fdcbc15ae33ebd30ba3d7198e854",
+    "wrapperChecksumUrl" : "https://services.gradle.org/distributions/gradle-8.14.5-wrapper.jar.sha256",
+    "wrapperChecksum" : "7d3a4ac4de1c32b59bc6a4eb8ecb8e612ccd0cf1ae1e99f66902da64df296172"
   }
 ]"""
         val result = GradleDownloadService.parseRemoteVersions(json)
         assertEquals(2, result.size)
         assertTrue(result[0].isCurrent)
-        assertEquals("8.7", result[0].version)
+        assertEquals("9.5.0", result[0].version)
+        assertFalse(result[0].isNightly)
+        assertTrue(result[0].isStable)
         assertFalse(result[1].isCurrent)
-        assertEquals("8.6", result[1].version)
+        assertEquals("8.14.5", result[1].version)
+        assertTrue(result[1].isStable)
     }
 
     // ---- isVersionDownloaded ----
